@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { INGREDIENT_GROUPS, ALL_ITEMS, findItem } from './ingredients.js'
 import { MEALS, MENU, scoreDish } from './menu.js'
+import { getRecipeSource } from './recipeSources.js'
 
 const LS_SELECTED = 'wic_selected'
 
@@ -118,8 +119,13 @@ function DishCard({ scored, selectedSet, index }) {
   const needsAny = dish.needsAny || []
   const gap = missing.length + (anyMissing ? 1 : 0)
   const farOff = !matched && !isPick && gap > 2
+  const requiredCount = (dish.needs || []).length + (needsAny.length > 0 ? 1 : 0)
+  const matchedCount = Math.max(0, requiredCount - gap)
+  const matchPct = requiredCount > 0 ? Math.round((matchedCount / requiredCount) * 100) : 0
+  const source = getRecipeSource(dish.id)
+
   return (
-    <article className={`dish-card ${matched ? 'matched' : ''}`}
+    <article className={`dish-card ${matched ? 'matched' : ''} ${source ? 'has-source' : ''}`}
       style={{ animationDelay: `${Math.min(index || 0, 16) * 30}ms` }}>
       <div className="dish-head">
         <h3 className="dish-name">{dish.name}</h3>
@@ -128,19 +134,78 @@ function DishCard({ scored, selectedSet, index }) {
         </span>
       </div>
       {dish.desc && <p className="dish-desc">{dish.desc}</p>}
+
       {!isPick && selectedSet.size > 0 && (
-        <div className="dish-ings">
-          {(dish.needs || []).map(id => (
-            <IngChip key={id} id={id} have={selectedSet.has(id)} missing={!selectedSet.has(id)} />
-          ))}
-          {needsAny.length > 0 && (
-            anyMissing
-              ? <span className="ing-chip missing">🍗 chicken or fish</span>
-              : <span className="ing-chip have">🍗 chicken or fish</span>
-          )}
-        </div>
+        <>
+          <div className="dish-match-row" aria-label={`${matchPct}% ingredient match`}>
+            <span>{matchedCount}/{requiredCount} matched</span>
+            <strong>{matchPct}%</strong>
+          </div>
+          <div className="dish-match-track" aria-hidden="true">
+            <span style={{ '--match': `${matchPct}%` }} />
+          </div>
+          <div className="dish-ings">
+            {(dish.needs || []).map(id => (
+              <IngChip key={id} id={id} have={selectedSet.has(id)} missing={!selectedSet.has(id)} />
+            ))}
+            {needsAny.length > 0 && (
+              anyMissing
+                ? <span className="ing-chip missing">🍗 chicken or fish</span>
+                : <span className="ing-chip have">🍗 chicken or fish</span>
+            )}
+          </div>
+        </>
+      )}
+
+      {source && (
+        <a className="recipe-link" href={source.url} target="_blank" rel="noreferrer">
+          <span>recipe reference</span>
+          <strong>{source.label} ↗</strong>
+        </a>
       )}
     </article>
+  )
+}
+
+function BestMatch({ scored, selectedSet }) {
+  if (!scored) return null
+
+  const { dish, matched, missing, anyMissing } = scored
+  const source = getRecipeSource(dish.id)
+  const used = [...(dish.needs || []), ...(dish.needsAny || [])]
+    .filter((id, index, ids) => selectedSet.has(id) && ids.indexOf(id) === index)
+  const gap = missing.length + (anyMissing ? 1 : 0)
+
+  return (
+    <section className="best-match" aria-label="Best fridge match">
+      <div className="best-match-copy">
+        <p className="best-match-kicker">best fridge match</p>
+        <h2>{dish.name}</h2>
+        <p>{dish.desc || 'A strong match for what is already in your kitchen.'}</p>
+        <div className="best-match-meta">
+          <span>{used.length} stocked ingredient{used.length === 1 ? '' : 's'} used</span>
+          <span>{matched ? 'ready from your fridge' : `${gap} item${gap === 1 ? '' : 's'} away`}</span>
+        </div>
+        {source && (
+          <a className="best-match-link" href={source.url} target="_blank" rel="noreferrer">
+            open recipe reference <span>{source.label} ↗</span>
+          </a>
+        )}
+      </div>
+      <div className="best-match-ingredients" aria-label="Ingredients this dish uses">
+        {used.length > 0
+          ? used.slice(0, 7).map((id, index) => {
+              const item = findItem(id)
+              return item ? (
+                <span key={id} style={{ '--chip-delay': `${index * 70}ms` }}>
+                  <b aria-hidden="true">{item.emoji}</b>
+                  {item.name}
+                </span>
+              ) : null
+            })
+          : <span className="best-match-empty">menu pick</span>}
+      </div>
+    </section>
   )
 }
 
@@ -292,8 +357,29 @@ export default function App() {
   }, [pickerSearch])
 
   const scoredMenu = useMemo(() => MENU.map(d => scoreDish(d, selected)), [selected])
+  const selectedItems = useMemo(() => ALL_ITEMS.filter(item => selected.has(item.id)), [selected])
 
   const matchCount = useMemo(() => scoredMenu.filter(s => s.matched).length, [scoredMenu])
+
+  const bestMatch = useMemo(() => {
+    if (selected.size === 0) return null
+
+    const usageCount = scored => {
+      const direct = (scored.dish.needs || []).filter(id => selected.has(id)).length
+      const any = (scored.dish.needsAny || []).some(id => selected.has(id)) ? 1 : 0
+      return direct + any
+    }
+
+    return [...scoredMenu]
+      .filter(scored => !scored.isPick)
+      .sort((a, b) => {
+        if (a.matched !== b.matched) return a.matched ? -1 : 1
+        const gapA = a.missing.length + (a.anyMissing ? 1 : 0)
+        const gapB = b.missing.length + (b.anyMissing ? 1 : 0)
+        if (gapA !== gapB) return gapA - gapB
+        return usageCount(b) - usageCount(a)
+      })[0] || null
+  }, [scoredMenu, selected])
 
   return (
     <div className="app">
@@ -395,11 +481,27 @@ export default function App() {
           {view === 'transition' && (
             <div className="transition-overlay" role="status" aria-live="polite">
               <div className="transition-card">
-                <span className="transition-mark" aria-hidden="true"><span /><span /><span /></span>
-                <p className="transition-text">{TRANSITION_BEATS[beat]}</p>
-                <div className="transition-dots" aria-hidden="true">
-                  <span /><span /><span />
-                </div>
+                {selectedItems.length > 0 ? (
+                  <div className="transition-orbit" aria-hidden="true">
+                    <span className="transition-plate" />
+                    {selectedItems.slice(0, 8).map((item, index, items) => (
+                      <span
+                        className="transition-orbit-item"
+                        key={item.id}
+                        style={{
+                          '--angle': `${index * (360 / items.length)}deg`,
+                          '--orbit-delay': `${index * 70}ms`,
+                        }}
+                      >
+                        {item.emoji}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="transition-mark" aria-hidden="true"><span /><span /><span /></span>
+                )}
+                <p className="transition-text" key={beat}>{TRANSITION_BEATS[beat]}</p>
+                <p className="transition-sub">matching your shelf against the menu</p>
               </div>
             </div>
           )}
@@ -416,7 +518,19 @@ export default function App() {
                 ? `${matchCount} dish${matchCount === 1 ? '' : 'es'} ready with what you stocked`
                 : 'nothing fully stocked - here is the whole menu anyway'}
             </p>
+            {selectedItems.length > 0 && (
+              <div className="stock-trail" aria-label="Your stocked ingredients">
+                {selectedItems.slice(0, 10).map((item, index) => (
+                  <span key={item.id} style={{ '--trail-delay': `${index * 55}ms` }} title={item.name}>
+                    {item.emoji}
+                  </span>
+                ))}
+                {selectedItems.length > 10 && <small>+{selectedItems.length - 10}</small>}
+              </div>
+            )}
           </div>
+
+          <BestMatch scored={bestMatch} selectedSet={selected} />
 
           <nav className="meal-filters" aria-label="Filter dishes by meal type">
             <button className={`meal-filter ${resultFilter === 'all' ? 'active' : ''}`} onClick={() => setResultFilter('all')} aria-pressed={resultFilter === 'all'}>All dishes</button>
