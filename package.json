@@ -1,5 +1,5 @@
 {
-  "name": "what-can-i-cook",
+  "name": "dish-it-out",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -17,5 +17,6 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.1",
     "vite": "^5.4.8"
-  }
+  },
+  "description": "A fridge-first recipe matcher with an interactive kitchen UI."
 }
